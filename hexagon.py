@@ -6,6 +6,10 @@ from socketserver import ThreadingMixIn
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import socket
+import os
+
+TOKEN = os.environ['Token']
+HIVE = os.environ['Hive'] if 'Hive' in os.environ else None
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -25,14 +29,28 @@ def pollen(wax_string: str):
 
 class Queen(BaseHTTPRequestHandler):
     PORT = 8888
+    client = None
 
     mapped_ports_for_addr: Dict[str, List[int]] = {}
     cells = []
     endpoints = {}
+    exposed_endpoints = {}
+    addr = None
 
     @classmethod
     def queen_setup(cls):
         server = ThreadingHTTPServer(("0.0.0.0", Queen.PORT), Queen)
+        cls.client = http.client.HTTPConnection(HIVE + ':88')
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        try:
+            s.connect(('10.254.254.254', 1))
+            IP = s.getsockname()[0]
+        except Exception:
+            IP = '127.0.0.1'
+        finally:
+            s.close()
+        cls.addr = IP
         print('[+] Queen spinning up')
         server.serve_forever()
 
@@ -46,14 +64,32 @@ class Queen(BaseHTTPRequestHandler):
             self.wfile.write(w.encode('utf-8'))
         elif self.path == '/register_endpoint':
             body: str = body.decode('utf-8')
-            cell = body.split('/')[0]
+            port = body.split(':')[1].split('/')[0]
             endpoint = body.split('/', 1)[1]
-            self.endpoints['/' + endpoint] = cell
+            self.endpoints['/' + endpoint] = self.request.getpeername()[0] + ':' + port
+        elif self.path == '/register_endpoint_hive':
+            body: str = body.decode('utf-8')
+            port = body.split(':')[1].split('/')[0]
+            endpoint = body.split('/', 1)[1]
+            self.endpoints['/' + endpoint] = self.request.getpeername()[0] + ':' + port
+            self.exposed_endpoints['/' + endpoint] = self.request.getpeername()[0] + ':' + port
+            self.client.request("POST", "/register_endpoint",
+                                self.addr + f':8888/{endpoint}',
+                                {"Content-type": "text/plain", 'Token': TOKEN})
+        elif self.path == '/register_endpoint_hive_unauth':
+            body: str = body.decode('utf-8')
+            port = body.split(':')[1].split('/')[0]
+            endpoint = body.split('/', 1)[1]
+            self.endpoints['/' + endpoint] = self.request.getpeername()[0] + ':' + port
+            self.exposed_endpoints['/' + endpoint] = self.request.getpeername()[0] + ':' + port
+            self.client.request("POST", "/register_endpoint_unauth",
+                                self.addr + f':8888/{endpoint}',
+                                {"Content-type": "text/plain", 'Token': TOKEN})
         else:
             try:
                 cell = self.endpoints[self.path]
                 client = http.client.HTTPConnection(cell)
-                client.request("POST", self.path, body, {"Content-type": "text/plain"})
+                client.request("POST", self.path, body, {"Content-type": "text/plain", 'Token': TOKEN})
                 self.wfile.write(client.getresponse().read())
             except KeyError:
                 self.wfile.write(wax(1, f'Endpoint {self.path} offline or non-existient').encode('utf-8'))
@@ -69,6 +105,8 @@ class Queen(BaseHTTPRequestHandler):
             self.wfile.write(client.getresponse().read())
         except KeyError:
             self.wfile.write(wax(1, f'Endpoint {self.path} offline or non-existient').encode('utf-8'))
+        except ConnectionRefusedError:
+            self.wfile.write(wax(1, f'Endpoint {self.endpoints[self.path]} offline or non-existient').encode('utf-8'))
 
     @classmethod
     def claim_available_slot(cls, address):
@@ -93,8 +131,10 @@ class Cell(BaseHTTPRequestHandler):
     server = None
 
     @classmethod
-    def add_endpoint(cls, endpoint_name: str, endpoint: Callable):
-        cls.client.request("POST", "/register_endpoint", cls.addr + ':' + str(cls.port) + endpoint_name, {"Content-type": "text/plain"})
+    def add_endpoint(cls, endpoint_name: str, endpoint: Callable, exposed: bool = False, unauth = False):
+        cls.client.request("POST", "/register_endpoint_hive" + ''.join('_unauth' if unauth else '') if exposed else "/register_endpoint",
+                           cls.addr + ':' + str(cls.port) + endpoint_name,
+                           {"Content-type": "text/plain", 'Token': TOKEN})
         cls.endpoints[endpoint_name] = endpoint
 
     def do_POST(self):
@@ -141,7 +181,7 @@ class Cell(BaseHTTPRequestHandler):
             finally:
                 s.close()
             cls.addr = IP
-        cls.client.request("POST", "/claim_slot", cls.addr, {"Content-type": "text/plain"})
+        cls.client.request("POST", "/claim_slot", cls.addr, {"Content-type": "text/plain", 'Token': TOKEN})
         resp = pollen(cls.client.getresponse().read().decode('utf-8'))
         port = int(resp["data"])
         print(f'[+] Got response from queen, binding to port {port}')
@@ -159,14 +199,14 @@ class Hexagon:
         Cell.configure()
         while not Cell.ready:
             pass
-        self.register_endpoint('/demo', Hexagon.demo_endpoint)
+        self.register_endpoint('/demo3', Hexagon.demo_endpoint, True, True)
 
-    def register_endpoint(self, endpoint_name: str, endpoint: Callable):
-        Cell.add_endpoint(endpoint_name, endpoint)
+    def register_endpoint(self, endpoint_name: str, endpoint: Callable, exposed=False, unauth=False):
+        Cell.add_endpoint(endpoint_name, endpoint, exposed, unauth)
 
     @staticmethod
     def demo_endpoint(req: BaseHTTPRequestHandler):
-        return wax(0, 'sup')
+        return wax(0, 'sup2')
 
 
 if __name__ == '__main__':
