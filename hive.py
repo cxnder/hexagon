@@ -5,24 +5,28 @@
 
 import http
 from http.client import HTTPConnection
-from threading import Thread
-from typing import List, Callable, Dict
+from typing import List, Dict
 from socketserver import ThreadingMixIn
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import json
-import socket
 import os
+import json
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
+
+def wax(status_code: int, rdata: str) -> str:
+    return json.dumps({
+        'status': status_code,
+        'data': rdata
+    })
 
 
 class Hive(BaseHTTPRequestHandler):
     PORT = 88
 
     mapped_ports_for_addr: Dict[str, List[int]] = {}
-    queens = []
+    queens = {}
     endpoints = {}
     unauth_endpoints = {}
 
@@ -54,6 +58,12 @@ class Hive(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
+            if self.path == '/register_queen':
+                body: str = body.decode('utf-8')
+                exposed_ip = self.request.getpeername()[0]
+                self.queens[exposed_ip] = body
+                print(f'Registered Queen for {exposed_ip} -> {body}')
+                return
             if self.path == '/register_endpoint':
                 body: str = body.decode('utf-8')
                 port = body.split(':')[1].split('/')[0]
@@ -95,6 +105,15 @@ class Hive(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
+        if self.path == "/get_queen":
+            key = self.request.getpeername()[0]
+            try:
+                queen = self.queens[key]
+                self.wfile.write(wax(0, queen).encode('utf-8'))
+                return
+            except KeyError:
+                self.wfile.write(wax(1, "").encode('utf-8'))
+                return
         try:
             try:
                 cell = self.endpoints[self.path]

@@ -7,6 +7,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import socket
 import os
+import time
 
 TOKEN = os.environ['Token']
 HIVE = os.environ['Hive'] if 'Hive' in os.environ else None
@@ -51,6 +52,8 @@ class Queen(BaseHTTPRequestHandler):
         finally:
             s.close()
         cls.addr = IP
+        cls.client.request("POST", "/register_queen", cls.addr + f':{Queen.PORT}', {"Content-type": "text/plain", 'Token': TOKEN})
+        cls.client.close()
         print('[+] Queen spinning up')
         server.serve_forever()
 
@@ -59,6 +62,7 @@ class Queen(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
+        self.client = http.client.HTTPConnection(HIVE + ':88')
         if self.path == '/claim_slot':
             w = Queen.claim_available_slot(body.decode('utf-8'))
             self.wfile.write(w.encode('utf-8'))
@@ -93,6 +97,7 @@ class Queen(BaseHTTPRequestHandler):
                 self.wfile.write(client.getresponse().read())
             except KeyError:
                 self.wfile.write(wax(1, f'Endpoint {self.path} offline or non-existient').encode('utf-8'))
+        self.client.close()
 
     def do_GET(self):
         self.send_response(200)
@@ -155,14 +160,28 @@ class Cell(BaseHTTPRequestHandler):
         self.wfile.write(val.encode('utf-8'))
 
     @classmethod
-    def configure(cls, queen='127.0.0.1') -> None:
+    def configure(cls) -> None:
         if cls.server is not None:
             raise KeyboardInterrupt
-        if queen == '127.0.0.1':
+
+        client = http.client.HTTPConnection(HIVE + ':88')
+        client.request("GET", "/get_queen", headers={'Token': TOKEN})
+        dat = pollen(client.getresponse().read().decode('utf-8'))
+        if dat["status"] == 1:
             Thread(target=Queen.queen_setup, args=[]).start()
-        cls.queen = queen
+            time.sleep(2)
+            has_queen = False
+            while not has_queen:
+                client.request("GET", "/get_queen", headers={'Token': TOKEN})
+                dat = pollen(client.getresponse().read().decode('utf-8'))
+                if dat["status"] == 0:
+                    cls.queen = dat["data"]
+                    has_queen = True
+        else:
+            cls.queen = dat["data"]
         cls.addr = ''
-        cls.client = http.client.HTTPConnection(cls.queen + ':' + str(Queen.PORT))
+        print(f'queen: {cls.queen}')
+        cls.client = http.client.HTTPConnection(cls.queen)
         cls.server = None
         Thread(target=cls.bind, args=[]).start()
 
@@ -181,7 +200,21 @@ class Cell(BaseHTTPRequestHandler):
             finally:
                 s.close()
             cls.addr = IP
-        cls.client.request("POST", "/claim_slot", cls.addr, {"Content-type": "text/plain", 'Token': TOKEN})
+        try:
+            cls.client.request("POST", "/claim_slot", cls.addr, {"Content-type": "text/plain", 'Token': TOKEN})
+        except ConnectionRefusedError:
+            client = http.client.HTTPConnection(HIVE + ':88')
+            Thread(target=Queen.queen_setup, args=[]).start()
+            time.sleep(2)
+            has_queen = False
+            while not has_queen:
+                client.request("GET", "/get_queen", headers={'Token': TOKEN})
+                dat = pollen(client.getresponse().read().decode('utf-8'))
+                if dat["status"] == 0:
+                    cls.queen = dat["data"]
+                    has_queen = True
+                    cls.client = http.client.HTTPConnection(cls.queen)
+                    cls.client.request("POST", "/claim_slot", cls.addr, {"Content-type": "text/plain", 'Token': TOKEN})
         resp = pollen(cls.client.getresponse().read().decode('utf-8'))
         port = int(resp["data"])
         print(f'[+] Got response from queen, binding to port {port}')
@@ -206,7 +239,7 @@ class Hexagon:
 
     @staticmethod
     def demo_endpoint(req: BaseHTTPRequestHandler):
-        return wax(0, 'sup2')
+        return wax(0, 'sup3')
 
 
 if __name__ == '__main__':
