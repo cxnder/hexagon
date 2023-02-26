@@ -111,7 +111,7 @@ class Queen(BaseHTTPRequestHandler):
         except KeyError:
             self.wfile.write(wax(1, f'Endpoint {self.path} offline or non-existient').encode('utf-8'))
         except ConnectionRefusedError:
-            self.wfile.write(wax(1, f'Endpoint {self.endpoints[self.path]} offline or non-existient').encode('utf-8'))
+            self.wfile.write(wax(1, f'Endpoint {self.path} offline or non-existient').encode('utf-8'))
 
     @classmethod
     def claim_available_slot(cls, address):
@@ -232,14 +232,14 @@ class Hexagon:
         Cell.configure()
         while not Cell.ready:
             pass
-        self.register_endpoint('/demo3', Hexagon.demo_endpoint, True, True)
+        self.register_endpoint('/demo', Hexagon.demo_endpoint, True, True)
 
     def register_endpoint(self, endpoint_name: str, endpoint: Callable, exposed=False, unauth=False):
         Cell.add_endpoint(endpoint_name, endpoint, exposed, unauth)
 
     @staticmethod
     def demo_endpoint(req: BaseHTTPRequestHandler):
-        return wax(0, 'sup3')
+        return wax(0, 'sup4')
 
 
 if __name__ == '__main__':
